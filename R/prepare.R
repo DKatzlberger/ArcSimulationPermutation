@@ -18,16 +18,17 @@ if (!interactive()) {
 
   # Meta
   knockout  <- args[3]
-  file_name <- paste0("prepared_", knockout)
+  file_name <- paste0("prepare_knockout_", knockout)
 
 } else {
   project_root <- "/home/scc_e_928652/ArcSimulationPermutation"
-  input_path   <- "results/manual/bpcells/bpcells_JB22_Spleen.rds"
+  input_path   <- "data/JB22_Spleen/rna_integrated.rds"
   output_path  <- "results/manual/prepare"
 
   # Meta
   knockout  <- "Cysltr2"
-  file_name <- paste0("prepare_", knockout)
+
+  file_name <- paste0("prepare_knockout_", knockout)
 }
 
 ## r-utils ====================================================================
@@ -56,7 +57,32 @@ seu_obj  <- .readRDS(input_path, info = txt)
 
 ## Genotype & on_guide ========================================================
 .assign_guide_by_max_count <- fun_with_ram(assign_guide_by_max_count)
-seu_obj                    <- .assign_guide_by_max_count(seu_obj)
 
-## Select knockout ============================================================
+seu_obj <- .assign_guide_by_max_count(seu_obj)
 seu_obj <- subset(seu_obj, subset = genotype %in% c("NTC", knockout))
+
+## Convert to SingleCellExperiment ============================================
+matr <- SeuratObject::LayerData(seu_obj, assay = "RNA", layer = "counts")
+meta <- seu_obj@meta.data
+
+sce_obj <- SingleCellExperiment::SingleCellExperiment(
+  assays  = list(counts = matr),
+  colData = meta
+)
+
+## Save =======================================================================
+.write_h5ad <- fun_with_ram(anndataR::write_h5ad)
+txt         <- sprintf("saved as %s", paste0(file_name, ".h5ad"))
+
+# Integer check
+stopifnot(all(SingleCellExperiment::counts(sce_obj) %% 1 == 0))
+
+.write_h5ad(
+  object = sce_obj, 
+  path = file.path(
+    output_path,
+    paste0(file_name, ".h5ad")
+  ),
+  mode = "w",
+  info = txt
+)

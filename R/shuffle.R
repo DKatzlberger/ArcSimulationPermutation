@@ -17,20 +17,21 @@ if (!interactive()) {
   output_path  <- "."
 
   # Meta
-  seed <- args[3]
+  knockout <- args[3]
+  seed     <- as.numeric(args[4])
   
-  file_name <- paste0("shuffled_seed_", seed)
+  file_name <- paste0("shuffle_knockout_", knockout, "_seed_", seed)
 
 } else {
   project_root <- "/home/scc_e_928652/ArcSimulationPermutation"
-  input_path   <- "results/manual/bpcells/bpcells.rds"
+  input_path   <- "results/manual/prepare/prepare_knockout_Cysltr2.h5ad"
   output_path  <- "results/manual/shuffle"
 
   # Meta
-  seed     <- 42
-  genotype <- "Cysltr2"
+  knockout  <- "Cysltr2"
+  seed      <- 1
   
-  file_name <- paste0("shuffled_seed_", seed)
+  file_name <- paste0("shuffle_knockout_", knockout, "_seed_", seed)
 }
 
 ## r-utils ====================================================================
@@ -45,33 +46,51 @@ script_startup(
   bioc = TRUE,
   packages = c(
     "SummarizedExperiment",
-    "SingleCellExperiment",
-    "Seurat",
-    "BPCells"
+    "SingleCellExperiment"
   )
 )
 
 ## Dataset ====================================================================
-.readRDS <- fun_with_ram(base::readRDS)
+.read_h5ad <- fun_with_ram(anndataR::read_h5ad)
 
-txt      <- sprintf("'%s' as 'BPCells Seurat'", input_path)
-seu_obj  <- .readRDS(input_path, info = txt)
+txt     <- sprintf("%s as 'SingleCellExperiment'", input_path)
+sce_obj <- .read_h5ad(input_path, as = "SingleCellExperiment", info = txt)
+
+# Create rowData
+sce_rd <- S4Vectors::DataFrame(gene = rownames(sce_obj))
 
 ## Shuffle ====================================================================
-set.seed(seed)
+if (identical(seed, 1)) {
 
-seu_obj$on_guide <- sample(seu_obj$on_guide)
-seu_obj$genotype <- sample(seu_obj$genotype)
+  sce_rd$seed <- seed
+  sce_rd$type <- "real"
+  
+} else {
+  set.seed(seed)
+  sce_obj$on_guide <- sample(sce_obj$on_guide)
+  sce_obj$genotype <- sample(sce_obj$genotype)
+
+  sce_rd$seed <- seed
+  sce_rd$type <- "perm"
+}
+
+# Add the rowData
+SummarizedExperiment::rowData(sce_obj) <- NULL
+SummarizedExperiment::rowData(sce_obj) <- sce_rd
 
 ## Save =======================================================================
-.saveRDS <- fun_with_ram(base::saveRDS)
-txt      <- sprintf("saved as %s", paste0(file_name, ".rds"))
+.write_h5ad <- fun_with_ram(anndataR::write_h5ad)
+txt         <- sprintf("saved as %s", paste0(file_name, ".h5ad"))
 
-.saveRDS(
-  sce_obj, 
-  file.path(
+# Integer check
+stopifnot(all(SingleCellExperiment::counts(sce_obj) %% 1 == 0))
+
+.write_h5ad(
+  object = sce_obj, 
+  path = file.path(
     output_path,
-    paste0(file_name, ".rds")
+    paste0(file_name, ".h5ad")
   ),
+  mode = "w",
   info = txt
 )
