@@ -281,11 +281,10 @@ script_startup <- function(
     if (bioc) {
       if (!requireNamespace("BiocManager", quietly = TRUE)) {
         renv::install("BiocManager", prompt = FALSE)
+        # BiocManager repositories 
+        suppressMessages(options(repos = BiocManager::repositories()))
         renv::install("BiocVersion", prompt = FALSE)
       }
-
-      # BiocManager repositories 
-      suppressMessages(options(repos = BiocManager::repositories()))
     }
   }
   t1 <- Sys.time()
@@ -326,31 +325,38 @@ script_startup <- function(
 assign_guide_by_max_count <- function(
   obj,
   assay = "CRISPR",
-  ntc_pattern = "NTC|NonTargeting|BRDN",
+  ntc_pattern = "^NTCms|^NonTargeting|^BRDN",
   verbose = TRUE
 ) {
 
-  # Extract guide counts
+  # Extract crispr counts
   counts <- obj@assays[[assay]]$counts
 
   # Assign guide
   obj$guide <- apply(counts, 2, function(x) {
+    if (max(x) == 0) return(NA)
     rownames(counts)[which.max(x)]
   })
 
-  # Assign genotype
-  obj$genotype <- ifelse(
-    grepl(ntc_pattern, obj$guide, ignore.case = TRUE),
-    "NTC",
-    sub("-.*$", "", obj$guide)
-  )
+  # Find cells with NTC pattern
+  is_ntc <- grepl(ntc_pattern, obj$guide, ignore.case = TRUE)
 
-  # Create on_guide column for NTC comparison
-  obj$on_guide <- ifelse(
-    grepl(ntc_pattern, obj$guide, ignore.case = TRUE),
-    "NTC",
-    obj$guide
-  )
+  # Assign new columns
+  obj$genotype <- ifelse(is_ntc, "NTC", sub("-.*$", "", obj$guide)) # "Brd7-20697" -> "Brd7"
+  obj$on_guide <- ifelse(is_ntc, "NTC", obj$guide)
+
+  # Validate guide assignment 
+  valid_cells <- !is.na(obj$guide)
+
+  genotypes_per_guide <- tapply(obj$genotype[valid_cells], obj$guide[valid_cells], function(x) length(unique(x)))
+  problematic_guides  <- names(genotypes_per_guide[genotypes_per_guide > 1])
+
+  if (length(problematic_guides) > 0) {
+    showf(
+      "Identical guides were assigned to different genotypes",
+      type = "stop"
+    )
+  }
 
   if (verbose) {
     showf("Assigned guides to %s cells", ncol(obj), type = "message")
@@ -359,4 +365,363 @@ assign_guide_by_max_count <- function(
 
   # Return
   obj
+}
+
+
+## DGE analysis ===============================================================
+parse_model_formula <- function(
+  formula,
+  verbose = TRUE
+) {
+
+  # From string to formula
+  f <- as.formula(formula)
+
+  # Random effects
+  bars <- reformulas::findbars(f)
+  if (is.null(bars)) {
+    rand_vars <- "1"
+  } else {
+    rand_vars <- unique(unname(unlist(lapply(bars, function(b) all.vars(b[[3]])))))
+  }
+  
+  # Fixed effects
+  fixed_vars <- labels(terms(reformulas::nobars(f)))
+  if (length(fixed_vars) > 0) {
+    target_covariate <- fixed_vars[1]
+    extra_covariates <- if (length(fixed_vars) > 1) fixed_vars[-1] else character(0)
+  } else {
+    target_covariate <- character(0)
+    extra_covariates <- character(0)
+  }
+
+  # Verbose
+  if (verbose) {
+    showf("%s", formula, type = "message")
+    showf("Target covariate: %s", target_covariate, type = "message")
+    showf("Extra covariates: %s", paste(extra_covariates, collapse = ", "), type = "message")
+    showf("Random covariate: %s", paste(rand_vars, collapse = ", "), type = "message")
+  }
+  
+  # Return
+  list(
+    target_covariate  = target_covariate,
+    extra_covariates  = extra_covariates,
+    random_covariates = rand_vars
+  )
+}
+
+extract_nebula <- function(
+  fit,
+  intercept = FALSE,
+  adjust_p = TRUE,
+  adjust_m = "BH"
+){
+
+  stats  <- fit$summary
+
+  # Identify coefficients
+  coef_names <- unique(sub(
+      "^(logFC|se|p)_",
+      "",
+      grep("^(logFC|se|p)_", colnames(stats), value = TRUE)
+  ))
+
+  # Build long-format table
+  out <- do.call(
+    rbind,
+    lapply(coef_names, function(coef){
+
+      data.frame(
+        coef = coef,
+        gene = stats$gene,
+        logFC = stats[[paste0("logFC_", coef)]],
+        se = stats[[paste0("se_", coef)]],
+        # t = stats[[paste0("logFC_", coef)]] / stats[[paste0("logFC_", coef)]], 
+        pvalue = stats[[paste0("p_", coef)]],
+        stringsAsFactors = FALSE
+      )
+    })
+  )
+
+  # Optionally remove intercept
+  if (!intercept) out <- out[out$coef != "(Intercept)", ]
+
+  # Optionally adjust p-values
+  if (adjust_p) {
+    out$FDR <- ave(
+      out$pvalue,
+      out$coef,
+      FUN = function(z){ p.adjust(z, method = adjust_m)}
+    )
+  }
+
+  rownames(out) <- NULL
+  out
+}
+
+extract_sceptre <- function(
+  fit,
+  intercept = FALSE,
+  adjust_p = TRUE,
+  adjust_m = "BH"
+) {
+
+  stats <- if (inherits(fit, "sceptre_object")) {
+    sceptre::get_result(
+      sceptre_object = fit,
+      analysis = "run_discovery_analysis"
+    )
+  } else {
+    showf("x must be a sceptre_object", type = "stop")
+  }
+  
+  out <- data.frame(
+    coef   = stats$grna_target,
+    gene   = stats$response_id,
+    logFC  = stats$log_2_fold_change,
+    se     = stats$se_fold_change,
+    # t      = stats$log_2_fold_change / stats$se_fold_change,
+    pvalue = stats$p_value,
+    stringsAsFactors = FALSE
+  )
+  
+  if (adjust_p) {
+    out$FDR <- ave(
+      out$pvalue,
+      out$coef,
+      FUN = function(z) { p.adjust(z, method = adjust_m) }
+    )
+  }
+  
+  rownames(out) <- NULL
+  out
+}
+
+extract_limma <- function(
+  fit,
+  intercept = FALSE,
+  adjust_p = TRUE,
+  adjust_m = "BH"
+){
+
+  coefs <- colnames(fit$coefficients)
+
+  if (!intercept) {
+    coefs <- setdiff(coefs, "(Intercept)")
+  }
+
+  out <- do.call(
+    rbind,
+    lapply(coefs, function(coef){
+
+      idx <- match(coef, colnames(fit$coefficients))
+
+      res <- data.frame(
+        coef = coef,
+        gene = rownames(fit$coefficients),
+        logFC = fit$coefficients[, idx],
+        se = fit$stdev.unscaled[, idx] * sqrt(fit$s2.post),
+        # t = fit$t[, idx],
+        pvalue = fit$p.value[, idx],
+        stringsAsFactors = FALSE
+      )
+
+      if (adjust_p) {
+        res$FDR <- p.adjust(
+          res$pvalue,
+          method = adjust_m
+        )
+      }
+
+      res
+    })
+  )
+
+  rownames(out) <- NULL
+  out
+}
+
+extract_edger <- function(
+  fit,
+  intercept = FALSE,
+  adjust_p = TRUE,
+  adjust_m = "BH"
+){
+
+  coefs <- colnames(fit$design)
+
+  if (!intercept) {
+    coefs <- setdiff(coefs, "(Intercept)")
+  }
+
+  out <- do.call(
+    rbind,
+    lapply(coefs, function(coef){
+
+      qlf <- edgeR::glmQLFTest(fit, coef = coef)
+      
+      res_table <- qlf$table
+      coef_idx  <- match(coef, colnames(fit$design))
+
+      res <- data.frame(
+        coef = coef,
+        gene = rownames(qlf),
+        logFC = res_table$logFC,
+        se = NA,
+        pvalue = res_table$PValue,
+        stringsAsFactors = FALSE
+      )
+
+      if (adjust_p) {
+        res$FDR <- p.adjust(
+          res$pvalue,
+          method = adjust_m
+        )
+      }
+
+      res
+    })
+  )
+
+  rownames(out) <- NULL
+  out
+}
+
+
+extract_deseq2 <- function(
+  fit,
+  intercept = FALSE,
+  adjust_p = TRUE,
+  adjust_m = "BH"
+){
+  coefs <- DESeq2::resultsNames(fit)
+
+  if (!intercept) {
+    coefs <- setdiff(coefs, "Intercept")
+  }
+
+  out <- do.call(
+    rbind,
+    lapply(coefs, function(coef){
+      
+      res_obj <- DESeq2::results(
+        fit, 
+        name = coef, 
+        cooksCutoff = FALSE, 
+        independentFiltering = FALSE
+      )
+
+      # Rename to limma format
+      clean_coef <- coef
+      if (clean_coef == "Intercept") {
+        clean_coef <- "(Intercept)"
+      } else {
+        clean_coef <- gsub("_vs_.*$", "", clean_coef)
+        clean_coef <- gsub("_", "", clean_coef)
+      }
+      
+      res <- data.frame(
+        coef   = clean_coef,
+        gene   = rownames(res_obj),
+        logFC  = res_obj$log2FoldChange,
+        se     = res_obj$lfcSE,
+        # t      = res_obj$stat,      # Wald-Statistik (Z-Score bei DESeq2)
+        pvalue = res_obj$pvalue,
+        stringsAsFactors = FALSE
+      )
+
+      if (adjust_p) {
+        res$FDR <- p.adjust(
+          res$pvalue,
+          method = adjust_m
+        )
+      } else {
+        res$FDR <- res_obj$padj
+      }
+
+      res
+    })
+  )
+
+  rownames(out) <- NULL
+  out
+}
+
+
+extract_seurat <- function(
+  fit,
+  adjust_p = TRUE,
+  adjust_m = "BH"
+){
+
+  out <- data.frame(
+    coef = fit$coef,
+    gene = rownames(fit),
+    logFC = fit$avg_log2FC,
+    se = NA,
+    pvalue = fit$p_val,
+    stringsAsFactors = FALSE
+  )
+
+  if (adjust_p) {
+    out$FDR <- p.adjust(
+      out$pvalue,
+      method = adjust_m
+    )
+  }
+
+  rownames(out) <- NULL
+  out
+}
+
+extract_scmageck <- function(
+  fit,
+  intercept = FALSE,
+  adjust_p = TRUE,
+  adjust_m = "BH"
+){
+
+  score <- fit$score
+  pval  <- fit$pvalue
+
+  # coefficients (= perturbations)
+  coefs <- score$Perturbedgene
+
+  # Remove NegCtrl unless requested (analogous to removing Intercept)
+  if (!intercept) {
+    coefs <- setdiff(coefs, "NegCtrl")
+  }
+
+  # Response genes
+  genes <- setdiff(colnames(score), "Perturbedgene")
+
+  out <- do.call(
+    rbind,
+    lapply(coefs, function(coef){
+
+      idx <- match(coef, score$Perturbedgene)
+
+      res <- data.frame(
+        coef = coef,
+        gene = genes,
+        logFC = as.numeric(score[idx, genes]),
+        se = NA_real_,
+        pvalue = as.numeric(pval[idx, genes]),
+        stringsAsFactors = FALSE
+      )
+
+      if (adjust_p) {
+        res$FDR <- p.adjust(
+          res$pvalue,
+          method = adjust_m
+        )
+      }
+
+      res
+    })
+  )
+
+  rownames(out) <- NULL
+  out
 }

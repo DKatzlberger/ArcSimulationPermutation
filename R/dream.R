@@ -1,0 +1,150 @@
+## max. code width ============================================================
+
+## Title: Arc Institute in vivo pertubation screens
+## Author: DKatzlberger
+## Date: 21.01.2026
+
+## Reproducibility ============================================================
+seed <- 42
+set.seed(seed)
+
+## Settings ===================================================================
+if (!interactive()) {
+  args <- commandArgs(trailingOnly = TRUE)
+
+  project_root <- args[1]
+  input_path   <- args[2]
+  output_path  <- "."
+
+  # Meta
+  knockout <- args[3]
+  seed     <- as.numeric(args[4])
+
+  formula <- args[5]
+  ref     <- args[6]
+  
+  file_name <- paste0("dream_knockout_", knockout, "_seed_", seed, "_", formula)
+
+} else {
+  project_root <- "/home/scc_e_928652/ArcSimulationPermutation"
+  input_path   <- "results/nextflow/pseudobulk/pseudobulk_knockout_Brd7_seed_34.h5ad"
+  output_path  <- "results/manual/limma"
+
+  # Meta
+  knockout <- "Brd7"
+  seed     <- 34
+
+  formula <- "~genotype"
+  ref     <- "NTC"
+  
+  file_name <- paste0("dream_knockout_", knockout, "_seed_", seed, "_", formula)
+}
+
+## r-utils ====================================================================
+source(file.path(project_root, "R", "utils.R"))
+
+## Environment ================================================================
+scc_info <- scc_status()
+
+script_startup(
+  root = project_root,
+  renv = TRUE,
+  bioc = TRUE,
+  packages = c(
+    "SummarizedExperiment",
+    "SingleCellExperiment",
+    "variancePartition"
+  )
+)
+
+## Dataset ====================================================================
+.read_h5ad <- fun_with_ram(anndataR::read_h5ad)
+
+txt     <- sprintf("%s as 'SingleCellExperiment'", input_path)
+sce_obj <- .read_h5ad(input_path, as = "SingleCellExperiment", info = txt)
+
+# Gene truths (simulations)
+sce_rd <- SingleCellExperiment::rowData(sce_obj)
+sce_rd <- as.data.frame(sce_rd)
+
+## Formula ====================================================================
+.parse_model_formula <- fun_with_ram(parse_model_formula)
+
+covs <- .parse_model_formula(formula)
+
+target_covariate <- covs$target_covariate
+extra_covariates <- covs$extra_covariates
+
+## DGE ========================================================================
+matr <- SingleCellExperiment::counts(sce_obj)
+meta <- SingleCellExperiment::colData(sce_obj)
+
+meta[[target_covariate]] <- factor(meta[[target_covariate]])
+meta[[target_covariate]] <- relevel(meta[[target_covariate]], ref = ref)
+
+# Filter genes
+fixed_formula <- paste("~", paste(c(target_covariate, extra_covariates), collapse = " + "))
+fixed_formula <- as.formula(fixed_formula)
+
+mm <- model.matrix(fixed_formula, data = meta)
+
+dge  <- edgeR::DGEList(matr)
+keep <- edgeR::filterByExpr(dge, design = mm)
+dge  <- dge[keep, , keep.lib.sizes = FALSE]
+
+# Fit
+dge  <- edgeR::calcNormFactors(dge)
+vobj <- variancePartition::voomWithDreamWeights(dge, formula, meta)
+fit  <- variancePartition::dream(vobj, formula, meta)
+fit  <- variancePartition::eBayes(fit)
+
+# Save
+.saveRDS  <- fun_with_ram(saveRDS)
+txt       <- "saving 'dream' fit obj."
+
+.saveRDS(
+  fit,
+  file = file.path(
+    output_path,
+    paste0(file_name, "_fit.rds")
+  ),
+  info = txt
+)
+
+
+## Statistics =================================================================
+.extract_limma <- fun_with_ram(extract_limma)
+
+# Keep only target covariate
+txt <- "getting 'dream' stats"
+dge <- .extract_limma(fit, info = txt)
+dge <- dge[grepl(paste0("^", target_covariate), dge$coef), ]
+
+# Add genotype
+dge$genotype <- sub(paste0("^", target_covariate), "", dge$coef)
+
+# Adding gene truth
+dge <- merge(
+  x = dge, 
+  y = sce_rd, 
+  by.x = "gene", 
+  by.y = "gene", 
+  all.x = TRUE
+)
+
+# Add information
+dge$formula     <- formula
+dge$method      <- "dream"
+dge$workflow    <- "pseudobulk"
+dge$method_type <- "parametric"
+
+# Save
+txt <- "saving 'dream' dge obj. (incl. gene truth)"
+.saveRDS(
+  dge, 
+  file = file.path(
+    output_path,
+    paste0(file_name, "_dge.rds")
+  ),
+  info = txt
+)

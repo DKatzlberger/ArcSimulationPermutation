@@ -18,6 +18,7 @@ if (!interactive()) {
 
   # Meta
   knockout  <- args[3]
+  
   file_name <- paste0("prepare_knockout_", knockout)
 
 } else {
@@ -44,8 +45,7 @@ script_startup(
   packages = c(
     "SummarizedExperiment",
     "SingleCellExperiment",
-    "Seurat",
-    "BPCells"
+    "Seurat"
   )
 )
 

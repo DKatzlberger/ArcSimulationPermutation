@@ -24,14 +24,14 @@ if (!interactive()) {
 
 } else {
   project_root <- "/home/scc_e_928652/ArcSimulationSynthetic"
-  input_path   <- "results/manual/prepare/prepare_knockout_Cysltr2.h5ad"
+  input_path   <- "results/nextflow/shuffle/shuffle_knockout_Brd7_seed_34.h5ad"
   output_path  <- "results/manual/pseudobulk"
 
 #   stopifnot(dirname(dirname(input_path)) == dirname(output_path))
 
   # Meta
-  knockout <- "Cysltr2"
-  seed     <- 42
+  knockout <- "Brd7"
+  seed     <- 34
 
   file_name <- paste0("pseudobulk_knockout_", knockout, "_seed_", seed)
 }
@@ -70,6 +70,10 @@ sce_obj <- .aggregate_expression(
   use.assay.type = "counts",
   info = txt
 )
+
+# Check for no NAs
+stopifnot(knockout %in% sce_obj$genotype)
+stopifnot("NTC" %in% sce_obj$genotype)
 
 ## Save =======================================================================
 .write_h5ad <- fun_with_ram(anndataR::write_h5ad)

@@ -16,25 +16,28 @@ if (!interactive()) {
   input_path   <- args[2]
   output_path  <- "."
 
-  formula <- args[7]
-  ref     <- args[8]
+  # Meta
+  knockout <- args[3]
+  seed     <- as.numeric(args[4])
 
-  file_name <- paste0("limma_knockout_", knockout, "_", formula)
+  formula <- args[5]
+  ref     <- args[6]
+  
+  file_name <- paste0("limma_knockout_", knockout, "_seed_", seed, "_", formula)
 
 } else {
-  project_root <- "/home/scc_e_928652/ArcSimulationSynthetic"
-  input_path   <- "results/manual/pseudobulk/pseudobulk_knockout_Cysltr2.h5ad"
+  project_root <- "/home/scc_e_928652/ArcSimulationPermutation"
+  input_path   <- "results/nextflow/pseudobulk/pseudobulk_knockout_Brd7_seed_34.h5ad"
   output_path  <- "results/manual/limma"
 
-#   stopifnot(dirname(dirname(input_path)) == dirname(output_path))
+  # Meta
+  knockout <- "Brd7"
+  seed     <- 34
 
   formula <- "~genotype"
   ref     <- "NTC"
-
-  # Meta
-  knockout  <- "Cysltr2"
-
-  file_name <- paste0("limma_knockout_", knockout, "_", formula)
+  
+  file_name <- paste0("limma_knockout_", knockout, "_seed_", seed, "_", formula)
 }
 
 ## r-utils ====================================================================
@@ -99,7 +102,7 @@ txt       <- "saving 'limma' fit obj."
 
 .saveRDS(
   fit,
-  file = here::here(
+  file = file.path(
     output_path,
     paste0(file_name, "_fit.rds")
   ),

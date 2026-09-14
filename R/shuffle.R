@@ -28,8 +28,8 @@ if (!interactive()) {
   output_path  <- "results/manual/shuffle"
 
   # Meta
-  knockout  <- "Cysltr2"
-  seed      <- 1
+  knockout <- "Cysltr2"
+  seed     <- 42
   
   file_name <- paste0("shuffle_knockout_", knockout, "_seed_", seed)
 }
@@ -67,12 +67,20 @@ if (identical(seed, 1)) {
   
 } else {
   set.seed(seed)
-  sce_obj$on_guide <- sample(sce_obj$on_guide)
-  sce_obj$genotype <- sample(sce_obj$genotype)
+
+  idx <- sample(seq_len(ncol(sce_obj)))
+
+  sce_obj$genotype <- sce_obj$genotype[idx]
+  sce_obj$guide    <- sce_obj$guide[idx]
+  sce_obj$on_guide <- sce_obj$on_guide[idx]
 
   sce_rd$seed <- seed
   sce_rd$type <- "perm"
 }
+
+# Check for no NAs
+stopifnot(knockout %in% sce_obj$genotype)
+stopifnot("NTC" %in% sce_obj$genotype)
 
 # Add the rowData
 SummarizedExperiment::rowData(sce_obj) <- NULL
