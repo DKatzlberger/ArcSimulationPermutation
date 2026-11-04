@@ -1,18 +1,21 @@
-#!/usr/bin/env Rscript
-
 ## max. code width ============================================================
 
 ## Title: Arc Institute in vivo pertubation screens
 ## Author: DKatzlberger
 ## Date: 21.01.2026
 
-## log ========================================================================
+## Log/Printing ===============================================================
+line80 <- function(x, char = "=") {
+  paste(x, strrep(char, times = max(1, 78 - nchar(x))))
+}
 
-showf <- function(fmt, ..., type = c(
-  "message", "print", "cat", "warning", "stop"
-)) {
-  type <- match.arg(type)
-  txt <- sprintf(fmt, ...)
+showf <- function(
+  fmt, 
+  ..., 
+  type = c("message", "print", "cat", "warning", "stop")
+) {
+  type   <- match.arg(type)
+  txt    <- sprintf(fmt, ...)
   caller <- sys.call(-1L)
 
   switch(
@@ -27,7 +30,6 @@ showf <- function(fmt, ..., type = c(
   invisible(txt)
 }
 
-
 fun_with_ram <- function(fun) {
 
   # Helper: extend '-' to line 80
@@ -37,7 +39,7 @@ fun_with_ram <- function(fun) {
 
   # Helper: job id  
   .scc_jobid <- function() {
-    cg <- readLines("/proc/self/cgroup", warn = FALSE)
+    cg  <- readLines("/proc/self/cgroup", warn = FALSE)
     hit <- grep("job_[0-9]+", cg, value = TRUE)
     if (length(hit) == 0) return(NA_character_)
     sub(".*job_([0-9]+).*", "\\1", hit[1])
@@ -94,7 +96,7 @@ fun_with_ram <- function(fun) {
   force(fun)
   force(fun_name)
 
- function(...) {
+  function(...) {
 
     args_list <- list(...)
     
@@ -202,9 +204,7 @@ fun_with_ram <- function(fun) {
   }
 }
 
-
 ## Environment ================================================================
-
 scc_status <- function(verbose = TRUE) {
 
   .scc_jobid <- function() {
@@ -320,19 +320,29 @@ script_startup <- function(
   invisible(TRUE)
 }
 
-
 ## CRISPR =====================================================================
+check_obj <- function(obj) {
+
+  class <- paste(class(obj), collapse = ", ")
+  dims  <- dim(obj)
+
+  showf(fmt = "Obj.: %s", class, type = "message")
+  if (!is.null(dims) && length(dims) == 2) {
+    showf(fmt = "Dim.: %s genes x %s cells", dims[1], dims[2], type = "message")
+  }
+}
+
 assign_guide_by_max_count <- function(
   obj,
   assay = "CRISPR",
-  ntc_pattern = "^NTCms|^NonTargeting|^BRDN",
+  ntc_pattern = "^NTCms|^NonTargeting|^BRDN|^NTC",
   verbose = TRUE
 ) {
 
   # Extract crispr counts
   counts <- obj@assays[[assay]]$counts
 
-  # Assign guide
+  # Assign guides
   obj$guide <- apply(counts, 2, function(x) {
     if (max(x) == 0) return(NA)
     rownames(counts)[which.max(x)]
@@ -342,31 +352,117 @@ assign_guide_by_max_count <- function(
   is_ntc <- grepl(ntc_pattern, obj$guide, ignore.case = TRUE)
 
   # Assign new columns
-  obj$genotype <- ifelse(is_ntc, "NTC", sub("-.*$", "", obj$guide)) # "Brd7-20697" -> "Brd7"
+  obj$genotype <- ifelse(is_ntc, "NTC", sub("-.*$", "", obj$guide))
   obj$on_guide <- ifelse(is_ntc, "NTC", obj$guide)
 
   # Validate guide assignment 
   valid_cells <- !is.na(obj$guide)
-
   genotypes_per_guide <- tapply(obj$genotype[valid_cells], obj$guide[valid_cells], function(x) length(unique(x)))
   problematic_guides  <- names(genotypes_per_guide[genotypes_per_guide > 1])
 
   if (length(problematic_guides) > 0) {
-    showf(
-      "Identical guides were assigned to different genotypes",
-      type = "stop"
-    )
+    showf("Identical guides were assigned to different genotypes", type = "stop")
   }
+  
+  # Verbose
+  n_valid_cells <- sum(!is.na(obj$guide))
+  n_na_cells    <- sum(is.na(obj$guide))
+  n_genotypes   <- length(unique(obj$genotype)) 
 
   if (verbose) {
-    showf("Assigned guides to %s cells", ncol(obj), type = "message")
-    showf("- %s unique knockouts/genotypes", length(unique(obj$genotype)), type = "message")
+    showf("Assigned %s unique genotypes to %s cells.", n_genotypes, n_valid_cells, type = "message")
+    if (n_na_cells > 0) showf("NOTE: %s cells couldn't be assigned.", n_na_cells, type = "message")
   }
 
   # Return
   obj
 }
 
+make_guide_target_df <- function(
+  data,
+  guide_col,
+  target_col, 
+  ref,
+  verbose = TRUE
+) {
+
+  data <- as.data.frame(data)
+  
+  # Unique grna targets
+  obj <- unique(data[, c(guide_col, target_col)])
+  colnames(obj) <- c("guide_id", "guide_target")
+  
+  # Targeting vs. non-targeting
+  obj$guide_target <- ifelse(
+    obj$guide_target == ref, 
+    "non-targeting", 
+    sprintf("%s%s", target_col, obj$guide_target)
+  )
+
+  # Verbose
+  n_guides  <- length(unique(obj$guide_id))
+  n_targets <- length(unique(obj$guide_target))
+
+  if (verbose) {
+    showf("Found %d unique guides mapped to %d unique genotypes.", n_guides, n_targets, type = "message")
+    showf("Recoding reference value '%s' to 'non-targeting'.", ref, type = "message")
+  }
+
+  # Return
+  rownames(obj) <- NULL
+  obj
+}
+
+make_pseudo_guide_matr <- function(
+  data,
+  guide_col,
+  pseudocount = 1,
+  verbose = TRUE
+){
+
+  data <- as.data.frame(data)
+
+  cell_ids  <- rownames(data)
+  guide_ids <- unique(data[[guide_col]])
+
+  # Create matrix
+  obj <- sapply(guide_ids, function(g) {
+    as.numeric(data[[guide_col]] == g)
+  })
+
+  colnames(obj) <- guide_ids
+  rownames(obj) <- cell_ids
+
+  # Add pseudocount
+  obj <- obj * pseudocount
+  obj <- t(obj)
+
+  # Verbose
+  n_cells  <- length(cell_ids)
+  n_guides <- length(guide_ids)
+
+  if (verbose) {
+    showf("Created pseudocounts for %d guides and %d cells.", n_guides, n_cells, type = "message")
+    showf("Added a pseudocount of %d to assigned cells.", pseudocount, type = "message")
+  }
+
+  # Return
+  obj
+}
+
+make_extra_cov_df <- function(
+  data,
+  target_col
+){
+
+  data <- as.data.frame(data)
+
+  # Create extra covariate df
+  obj <- data[, target_col, drop = FALSE]
+  
+  # Return
+  obj
+}
 
 ## DGE analysis ===============================================================
 parse_model_formula <- function(
@@ -380,7 +476,7 @@ parse_model_formula <- function(
   # Random effects
   bars <- reformulas::findbars(f)
   if (is.null(bars)) {
-    rand_vars <- "1"
+    rand_vars <- NULL
   } else {
     rand_vars <- unique(unname(unlist(lapply(bars, function(b) all.vars(b[[3]])))))
   }
@@ -389,15 +485,15 @@ parse_model_formula <- function(
   fixed_vars <- labels(terms(reformulas::nobars(f)))
   if (length(fixed_vars) > 0) {
     target_covariate <- fixed_vars[1]
-    extra_covariates <- if (length(fixed_vars) > 1) fixed_vars[-1] else character(0)
+    extra_covariates <- if (length(fixed_vars) > 1) fixed_vars[-1] else NULL
   } else {
-    target_covariate <- character(0)
-    extra_covariates <- character(0)
+    target_covariate <- NULL
+    extra_covariates <- NULL
   }
 
   # Verbose
   if (verbose) {
-    showf("%s", formula, type = "message")
+    showf("Formula: %s", formula, type = "message")
     showf("Target covariate: %s", target_covariate, type = "message")
     showf("Extra covariates: %s", paste(extra_covariates, collapse = ", "), type = "message")
     showf("Random covariate: %s", paste(rand_vars, collapse = ", "), type = "message")
@@ -411,6 +507,43 @@ parse_model_formula <- function(
   )
 }
 
+validate_dge <- function(
+  x
+){
+  
+  # Check
+  if (nrow(x) == 0) {
+    showf("Statistic has zero rows. Maybe wrong extraction fun.", type = "stop")
+  }
+
+  # Universal req. columns
+  required_cols <- c("coef", "gene", "logFC", "se", "pvalue")
+  missing_cols  <- setdiff(required_cols, colnames(x))
+
+  if (length(missing_cols) > 0) {
+    showf(
+      paste0("Statistic is missing req. column(s): ", 
+      paste(missing_cols, collapse = ", ")), 
+      type = "stop"
+    )
+  }
+
+  # Check for NA columns
+  required_cols <- c("pvalue")
+  na_cols       <- colSums(is.na(x[required_cols]))
+
+  if (any(na_cols > 0)) {
+    showf(
+      paste0("NOTE: Statistic has NA in column(s): ", 
+      paste(names(na_cols)[na_cols > 0], collapse = ", ")), 
+      type = "message"
+    )
+  }
+
+  # Return
+  invisible(TRUE)
+}
+
 extract_nebula <- function(
   fit,
   intercept = FALSE,
@@ -418,7 +551,7 @@ extract_nebula <- function(
   adjust_m = "BH"
 ){
 
-  stats  <- fit$summary
+  stats <- fit$summary
 
   # Identify coefficients
   coef_names <- unique(sub(
@@ -437,7 +570,6 @@ extract_nebula <- function(
         gene = stats$gene,
         logFC = stats[[paste0("logFC_", coef)]],
         se = stats[[paste0("se_", coef)]],
-        # t = stats[[paste0("logFC_", coef)]] / stats[[paste0("logFC_", coef)]], 
         pvalue = stats[[paste0("p_", coef)]],
         stringsAsFactors = FALSE
       )
@@ -456,7 +588,11 @@ extract_nebula <- function(
     )
   }
 
+  # Validate
   rownames(out) <- NULL
+  validate_dge(out)
+
+  # Return
   out
 }
 
@@ -467,21 +603,18 @@ extract_sceptre <- function(
   adjust_m = "BH"
 ) {
 
+  # Extract the results table
   stats <- if (inherits(fit, "sceptre_object")) {
-    sceptre::get_result(
-      sceptre_object = fit,
-      analysis = "run_discovery_analysis"
-    )
+    sceptre::get_result(fit, analysis = "run_discovery_analysis")
   } else {
-    showf("x must be a sceptre_object", type = "stop")
+    showf("fit must be a 'sceptre_object'", type = "stop")
   }
   
   out <- data.frame(
-    coef   = stats$grna_target,
-    gene   = stats$response_id,
-    logFC  = stats$log_2_fold_change,
-    se     = stats$se_fold_change,
-    # t      = stats$log_2_fold_change / stats$se_fold_change,
+    coef = stats$grna_target,
+    gene = stats$response_id,
+    logFC = stats$log_2_fold_change,
+    se = stats$se_fold_change,
     pvalue = stats$p_value,
     stringsAsFactors = FALSE
   )
@@ -494,7 +627,11 @@ extract_sceptre <- function(
     )
   }
   
+  # Validate
   rownames(out) <- NULL
+  validate_dge(out)
+
+  # Return
   out
 }
 
@@ -522,23 +659,28 @@ extract_limma <- function(
         gene = rownames(fit$coefficients),
         logFC = fit$coefficients[, idx],
         se = fit$stdev.unscaled[, idx] * sqrt(fit$s2.post),
-        # t = fit$t[, idx],
         pvalue = fit$p.value[, idx],
         stringsAsFactors = FALSE
       )
-
-      if (adjust_p) {
-        res$FDR <- p.adjust(
-          res$pvalue,
-          method = adjust_m
-        )
-      }
 
       res
     })
   )
 
+  # Optionally adjust p-values
+  if (adjust_p) {
+    out$FDR <- ave(
+      out$pvalue,
+      out$coef,
+      FUN = function(z){ p.adjust(z, method = adjust_m)}
+    )
+  }
+
+  # Validate
   rownames(out) <- NULL
+  validate_dge(out)
+
+  # Return
   out
 }
 
@@ -568,29 +710,35 @@ extract_edger <- function(
         coef = coef,
         gene = rownames(qlf),
         logFC = res_table$logFC,
-        se = NA,
+        se = NA_real_,
         pvalue = res_table$PValue,
         stringsAsFactors = FALSE
       )
-
-      if (adjust_p) {
-        res$FDR <- p.adjust(
-          res$pvalue,
-          method = adjust_m
-        )
-      }
 
       res
     })
   )
 
+  # Optionally adjust p-values
+  if (adjust_p) {
+    out$FDR <- ave(
+      out$pvalue,
+      out$coef,
+      FUN = function(z){ p.adjust(z, method = adjust_m)}
+    )
+  }
+
+  # Validate
   rownames(out) <- NULL
+  validate_dge(out)
+
+  # Return
   out
 }
 
-
 extract_deseq2 <- function(
   fit,
+  gene_qc = FALSE,
   intercept = FALSE,
   adjust_p = TRUE,
   adjust_m = "BH"
@@ -607,9 +755,9 @@ extract_deseq2 <- function(
       
       res_obj <- DESeq2::results(
         fit, 
-        name = coef, 
-        cooksCutoff = FALSE, 
-        independentFiltering = FALSE
+        name = coef,
+        cooksCutoff = gene_qc, 
+        independentFiltering = gene_qc
       )
 
       # Rename to limma format
@@ -622,32 +770,34 @@ extract_deseq2 <- function(
       }
       
       res <- data.frame(
-        coef   = clean_coef,
-        gene   = rownames(res_obj),
-        logFC  = res_obj$log2FoldChange,
-        se     = res_obj$lfcSE,
-        # t      = res_obj$stat,      # Wald-Statistik (Z-Score bei DESeq2)
+        coef = clean_coef,
+        gene = rownames(res_obj),
+        logFC = res_obj$log2FoldChange,
+        se = res_obj$lfcSE,
         pvalue = res_obj$pvalue,
         stringsAsFactors = FALSE
       )
-
-      if (adjust_p) {
-        res$FDR <- p.adjust(
-          res$pvalue,
-          method = adjust_m
-        )
-      } else {
-        res$FDR <- res_obj$padj
-      }
 
       res
     })
   )
 
+  # Optionally adjust p-values
+  if (adjust_p) {
+    out$FDR <- ave(
+      out$pvalue,
+      out$coef,
+      FUN = function(z){ p.adjust(z, method = adjust_m)}
+    )
+  }
+
+  # Validate
   rownames(out) <- NULL
+  validate_dge(out)
+
+  # Return
   out
 }
-
 
 extract_seurat <- function(
   fit,
@@ -659,69 +809,423 @@ extract_seurat <- function(
     coef = fit$coef,
     gene = rownames(fit),
     logFC = fit$avg_log2FC,
-    se = NA,
+    se = NA_real_,
     pvalue = fit$p_val,
     stringsAsFactors = FALSE
   )
 
+  # Optionally adjust p-values
   if (adjust_p) {
-    out$FDR <- p.adjust(
+    out$FDR <- ave(
       out$pvalue,
-      method = adjust_m
+      out$coef,
+      FUN = function(z){ p.adjust(z, method = adjust_m)}
     )
   }
 
+  # Validate
   rownames(out) <- NULL
+  validate_dge(out)
+
+  # Return
   out
 }
 
 extract_scmageck <- function(
   fit,
+  input_ids,
   intercept = FALSE,
   adjust_p = TRUE,
   adjust_m = "BH"
-){
+) {
+
+  .match_scmageck_ids <- function(ids, reference) {
+
+    unmatched <- !ids %in% reference
+    if (!any(unmatched)) return(ids)
+
+    # Reverse observed make.names() conversions
+    candidates <- make.names(reference, unique = FALSE)
+    n_matches  <- vapply(ids[unmatched], function(x) sum(candidates == x), integer(1))
+    if (any(n_matches > 1L)) showf(fmt = "Ambiguous mapping for %s scMAGeCK IDs.", sum(n_matches > 1L), type = "stop")
+
+    # Match scMAGeCK IDs against converted input IDs
+    idx <- match(ids[unmatched], candidates)
+    if (anyNA(idx)) showf(fmt = "Unable to map %s scMAGeCK IDs to input IDs.", sum(is.na(idx)), type = "stop")
+    
+    # Restore original input IDs
+    ids[unmatched] <- reference[idx]
+    if (anyDuplicated(ids)) showf(fmt = "ID mapping produced duplicated input IDs.", type = "stop")
+
+    # Return
+    showf(fmt = "Successfully mapped all IDs.", type = "message")
+    ids
+  }
 
   score <- fit$score
   pval  <- fit$pvalue
 
-  # coefficients (= perturbations)
   coefs <- score$Perturbedgene
+  if (!intercept) coefs <- setdiff(coefs, "NegCtrl")
+  
+  score_genes <- setdiff(colnames(score), "Perturbedgene")
+  pval_genes  <- setdiff(colnames(pval), "Perturbedgene")
 
-  # Remove NegCtrl unless requested (analogous to removing Intercept)
-  if (!intercept) {
-    coefs <- setdiff(coefs, "NegCtrl")
-  }
+  # Ensure score and p-value matrices have identical feature names
+  if (!identical(score_genes, pval_genes)) showf("IDs differ between score and p-value matrices.", type = "stop")
 
-  # Response genes
-  genes <- setdiff(colnames(score), "Perturbedgene")
+  # Restore input identifiers only when necessary
+  genes <- .match_scmageck_ids(ids = score_genes, reference = input_ids)
 
   out <- do.call(
     rbind,
-    lapply(coefs, function(coef){
+    lapply(coefs, function(coef) {
 
       idx <- match(coef, score$Perturbedgene)
 
-      res <- data.frame(
+      data.frame(
         coef = coef,
         gene = genes,
-        logFC = as.numeric(score[idx, genes]),
+        logFC = as.numeric(score[idx, score_genes]),
         se = NA_real_,
-        pvalue = as.numeric(pval[idx, genes]),
+        pvalue = as.numeric(pval[idx, pval_genes]),
         stringsAsFactors = FALSE
       )
-
-      if (adjust_p) {
-        res$FDR <- p.adjust(
-          res$pvalue,
-          method = adjust_m
-        )
-      }
-
-      res
     })
   )
 
+  if (adjust_p) {
+    out$FDR <- ave(
+      out$pvalue,
+      out$coef,
+      FUN = function(z) p.adjust(z, method = adjust_m)
+    )
+  }
+
   rownames(out) <- NULL
+  validate_dge(out)
+  # Return
   out
+}
+
+## ggplot2 ====================================================================
+theme_DK <- function(
+  base_size = 5,
+  lgd_key_prop = 1,
+  lgd_position = "right",
+  make_void = FALSE,
+  show_axis = TRUE,
+  show_grid = TRUE,
+  show_facet_x = TRUE,
+  show_facet_y = TRUE,
+  show_label_x = TRUE,
+  show_label_y = TRUE,
+  show_ticks_x = TRUE,
+  show_ticks_y = TRUE,
+  show_borders = TRUE,
+  zero_margins = TRUE,
+  show_identity = FALSE,
+  xintercept = NULL,
+  yintercept = NULL,
+  rotate = NULL,
+  base_family = "sans",
+  ...
+) {
+
+  # Unit conversion helpers 
+  mm_to_pt <- function(mm) mm / 0.352778
+  pt_to_mm <- function(pt) pt * 0.352778
+
+  # Set internal params. for void
+  if (make_void) {
+    show_axis <- FALSE
+    show_grid <- FALSE
+    show_label_x <- FALSE
+    show_label_y <- FALSE
+    show_ticks_x <- FALSE
+    show_ticks_y <- FALSE
+    show_borders <- FALSE
+  }
+
+  # Base theme
+  p <- ggplot2::theme(
+    plot.background  = ggplot2::element_rect(fill = "white", color = NA),
+    panel.background = ggplot2::element_rect(fill = "white", color = NA),
+    strip.background = ggplot2::element_rect(fill = "white", color = NA),
+
+    # Facets
+    strip.placement = "inside",
+    strip.text.x = ggplot2::element_text(size = base_size, family = base_family, margin = ggplot2::margin(b = 1, t = 0, unit = "mm")),
+    strip.text.y = ggplot2::element_text(size = base_size, family = base_family, margin = ggplot2::margin(b = 1, t = 0, unit = "mm")),
+    panel.spacing.x = grid::unit(1, "mm"),
+    panel.spacing.y = grid::unit(1, "mm"),
+
+    axis.line  = ggplot2::element_line(color = "black", linewidth = 0.3),
+    axis.ticks = ggplot2::element_line(color = "black", linewidth = 0.3),
+    axis.ticks.length = ggplot2::unit(1, "mm"),
+    panel.grid.minor = ggplot2::element_blank(),
+    panel.grid.major = if (show_grid) ggplot2::element_line(color = "grey80", linewidth = 0.3) else ggplot2::element_blank(),
+
+    # Text
+    axis.text  = ggplot2::element_text(size = base_size, family = base_family),
+    axis.title = ggplot2::element_text(size = base_size, family = base_family),
+    plot.title = ggplot2::element_text(size = base_size, hjust = 0.5, family = base_family),
+    plot.subtitle = ggplot2::element_text(size = base_size, hjust = 0.5, family = base_family),
+    plot.caption = ggplot2::element_text(size = base_size, hjust = 0, family = base_family),
+    ...
+  )
+
+  # Legend sizing
+  lgd_key_size  <- base_size * lgd_key_prop
+
+  p <- p + ggplot2::theme(
+    legend.title = ggplot2::element_text(size = base_size, family = base_family, margin = ggplot2::margin(b = 1, unit = "mm")),
+    legend.text = ggplot2::element_text(size = base_size, family = base_family),
+
+    legend.key.height = ggplot2::unit(pt_to_mm(lgd_key_size), "mm"),
+    legend.key.width = ggplot2::unit(pt_to_mm(base_size), "mm"),
+    legend.key.spacing = ggplot2::unit(0.5, "mm"),
+    legend.box.spacing = ggplot2::unit(1, "mm"),
+    legend.background = ggplot2::element_rect(fill = NA, color = NA)
+  )
+
+  # Legend position
+  theme_lgd_pos    <- lgd_position
+  theme_lgd_inside <- NULL
+  theme_lgd_just   <- NULL
+
+  if (lgd_position %in% c("inside.top.left", "inside.top.right", "inside.bottom.left", "inside.bottom.right")) {
+    theme_lgd_pos <- "inside"
+    
+    if (lgd_position == "inside.top.left") {
+      theme_lgd_inside <- c(0.02, 0.98)
+      theme_lgd_just   <- c(0, 1)
+    } else if (lgd_position == "inside.top.right") {
+      theme_lgd_inside <- c(0.98, 0.98)
+      theme_lgd_just   <- c(1, 1)
+    } else if (lgd_position == "inside.bottom.left") {
+      theme_lgd_inside <- c(0.02, 0.02)
+      theme_lgd_just   <- c(0, 0)
+    } else if (lgd_position == "inside.bottom.right") {
+      theme_lgd_inside <- c(0.98, 0.02)
+      theme_lgd_just   <- c(1, 0)
+    }
+  }
+
+  p <- p + ggplot2::theme(
+    legend.position = theme_lgd_pos,
+    legend.position.inside = theme_lgd_inside,
+    legend.justification = theme_lgd_just
+  )
+
+  # Adaptive margins (zero margins)
+  if (zero_margins) {
+    p <- p + ggplot2::theme(
+      legend.margin = ggplot2::margin(0, 0, 0, 0, unit = "mm"),
+      plot.margin = ggplot2::margin(1, 1, 1, 1, unit = "mm")
+    )
+  }
+
+  # Adaptive facets (x and y facet)
+  if (!show_facet_x) p <- p + ggplot2::theme(strip.text.x = ggplot2::element_blank())
+  if (!show_facet_y) p <- p + ggplot2::theme(strip.text.y = ggplot2::element_blank())
+
+  # Adaptive boarders
+  if (show_borders) { p <- p + ggplot2::theme(
+      panel.border = ggplot2::element_rect(color = "black", fill = NA, linewidth = 0.6),
+      axis.line = ggplot2::element_blank()
+    )
+  }
+
+  # Adaptive axis
+  if (!show_axis) {
+    p <- p + ggplot2::theme(
+      axis.line = ggplot2::element_blank(),
+      axis.ticks = ggplot2::element_blank(), 
+      axis.text.x = ggplot2::element_text(margin = ggplot2::margin(t = 0.5, b = 0, unit = "mm")), # pull x labels closer
+      axis.text.y = ggplot2::element_text(margin = ggplot2::margin(r = 0.5, l = 0, unit = "mm"))  # pull y labels closer
+    )
+  }
+
+  # Adaptive rotation
+  if (!is.null(rotate)) {
+    angle <- rotate %% 360
+    # Determine justification heuristically
+    if (angle == 0) {
+      hjust <- 0.5; vjust <- 0.5
+    } else if (angle == 90) {
+      hjust <- 1; vjust <- 0.5
+    } else if (angle == 270) {
+      hjust <- 0; vjust <- 0.5
+    } else if (angle > 0 && angle < 90) {
+      hjust <- 1; vjust <- 1
+    } else if (angle > 90 && angle < 180) {
+      hjust <- 1; vjust <- 0
+    } else if (angle > 180 && angle < 270) {
+      hjust <- 0; vjust <- 0
+    } else { # e.g., 315°
+      hjust <- 0; vjust <- 1
+    }
+
+    p <- p + ggplot2::theme(
+      axis.text.x = ggplot2::element_text(
+        angle = angle,
+        hjust = hjust,
+        vjust = vjust,
+        family = base_family
+      )
+    )
+  }
+
+  if (!show_label_x) {
+    p <- p + ggplot2::theme(
+      axis.title.x = ggplot2::element_blank()
+    )
+  }
+
+  if (!show_label_y) {
+    p <- p + ggplot2::theme(
+      axis.title.y = ggplot2::element_blank()
+    )
+  }
+
+  if (!show_ticks_x) {
+    p <- p + ggplot2::theme(
+      axis.ticks.x = ggplot2::element_blank(),
+      axis.text.x = ggplot2::element_blank()
+    )
+  }
+
+  if (!show_ticks_y) {
+    p <- p + ggplot2::theme(
+      axis.ticks.y = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_blank()
+    )
+  }
+
+  # Extra layers
+  layers <- list()
+
+  # Identity line y = x
+  if (show_identity) {
+    layers <- append(
+      layers,
+      list(
+        ggplot2::geom_abline(
+          slope = 1,
+          intercept = 0,
+          linetype = "solid",
+          linewidth = 0.3,
+          color = "black"
+        )
+      )
+    )
+  }
+
+   # Vertical intercept(s)
+  if (!is.null(xintercept)) {
+    layers <- append(
+      layers,
+      list(
+        ggplot2::geom_vline(
+          xintercept = xintercept,
+          linetype = "solid",
+          linewidth = 0.3,
+          color = "black"
+        )
+      )
+    )
+  }
+
+  # Horizontal intercept(s)
+  if (!is.null(yintercept)) {
+    layers <- append(
+      layers,
+      list(
+        ggplot2::geom_hline(
+          yintercept = yintercept,
+          linetype = "solid",
+          linewidth = 0.3,
+          color = "black"
+        )
+      )
+    )
+  }
+
+  # Return theme + layers
+  return(c(list(p), layers))
+}
+
+add_corner_axis <- function(p, base_size = 5) {
+
+  `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+  xlab <- p$labels$x %||% "x"
+  ylab <- p$labels$y %||% "y"
+
+  # Apply coord_fixed
+  build <- ggplot2::ggplot_build(p)
+
+  xr <- build$layout$panel_params[[1]]$x.range
+  yr <- build$layout$panel_params[[1]]$y.range
+
+  dx <- diff(xr)
+  dy <- diff(yr)
+
+  x0 <- xr[1]
+  y0 <- yr[1]
+
+  # proportional arrow lengths
+  arrow_x <- 0.1 * dx
+  arrow_y <- 0.1 * dy
+
+  # proportional label offsets
+  offset_x <- 0.03 * dy
+  offset_y <- 0.03 * dx
+
+  p <- p + ggplot2::annotate(
+    "segment",
+    x = x0, 
+    xend = x0 + arrow_x,
+    y = y0, 
+    yend = y0,
+    arrow = grid::arrow(
+      length = grid::unit(1, "mm"),
+      type = "closed"
+    ),
+    linewidth = 0.3
+  ) +
+  ggplot2::annotate(
+    "segment",
+    x = x0, 
+    xend = x0,
+    y = y0, 
+    yend = y0 + arrow_y,
+    arrow = grid::arrow(
+      length = grid::unit(1, "mm"),
+      type = "closed"
+    ),
+    linewidth = 0.3
+  ) +
+  ggplot2::annotate(
+    "text",
+    x = x0 + arrow_x / 2,
+    y = y0 - offset_x,
+    label = xlab,
+    hjust = 0.5,
+    vjust = 1,
+    size = base_size / 3
+  ) +
+  ggplot2::annotate(
+    "text",
+    x = x0 - offset_y,
+    y = y0 + arrow_y / 2,
+    label = ylab,
+    angle = 90,
+    hjust = 0.5,
+    vjust = 0,
+    size = base_size / 3
+  )
+
+  return(p)
 }
