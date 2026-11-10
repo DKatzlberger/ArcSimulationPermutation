@@ -17,11 +17,11 @@ params {
     data: Path = "data/GSE213511/rna_integrated.rds"
 
     // Prepare
-    prepare_celltype = [ "Ery" ] // "Ery", "Imm. B-cell", "Gran. P", "GMP", "Gran.", "HSC"
-    prepare_knockout = [ "Cebpa" ] // "Cebpa", "Kmt2d", "Brd9", "Rcor1"
+    prepare_celltype = [ "Ery", "Imm. B-cell", "Gran. P", "GMP", "Gran.", "HSC" ] // "Ery", "Imm. B-cell", "Gran. P", "GMP", "Gran.", "HSC"
+    prepare_knockout = [ "Cebpa", "Kmt2d", "Brd9", "Rcor1" ] // "Cebpa", "Kmt2d", "Brd9", "Rcor1"
 
     // Shuffle (1 is not shuffled "real")
-    shuffle_seed = [ 1, 42, 34 ] // 1, 42, 34, 67, 54, 15, 56, 23, 13, 19, 44
+    shuffle_seed = (1..100)
 
     // limma
     limma_formula = [ "~genotype" , "~genotype + sample" ]
@@ -226,8 +226,7 @@ workflow {
     res_scmageck = scmageck.out
 
     // Visualize
-    res_svg = visualize.out.svg
-    res_rds = visualize.out.rds
+    res_visualize = visualize.out.panels
 }
 
 // Publish ====================================================================
@@ -281,12 +280,8 @@ output {
     }
 
     // Visualize
-    res_svg {
-        path "15-visualize"
-        mode "copy"
-    }
-    res_rds {
-        path "15-visualize"
+    res_visualize {
+        path "12-visualize"
         mode "copy"
     }
 }

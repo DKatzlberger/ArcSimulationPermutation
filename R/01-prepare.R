@@ -152,7 +152,7 @@ sce_rd <- do.call(
   what = S4Vectors::DataFrame,
   args = c(
     list(
-      sim_mode = "synthetic",
+      sim_mode = "permutation",
       celltype = as.character(celltype),
       knockout = if (is.null(knockout)) rep("NULL", nrow(sce_obj)) else knockout,
       n_genes = nrow(sce_obj),

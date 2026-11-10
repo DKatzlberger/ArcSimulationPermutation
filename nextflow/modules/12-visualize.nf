@@ -6,9 +6,7 @@ process visualize {
     path dge_files
 
     output:
-    path "*.svg", emit: svg
-    path "*.rds", emit: rds
-
+    path "panel_*", emit: panels
 
     script:
     """

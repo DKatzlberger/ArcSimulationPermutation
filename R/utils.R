@@ -1229,3 +1229,365 @@ add_corner_axis <- function(p, base_size = 5) {
 
   return(p)
 }
+
+## ComplexHeatmap =============================================================
+cmplx_gp <- function(
+  base_size = 5, 
+  base_family = "sans", 
+  ...
+) {
+  grid::gpar(
+    fontsize = base_size,
+    fontfamily = base_family,
+    fontface = "plain",
+    ...
+  )
+}
+
+cmplx_bar <- function(
+  x,
+  base_size = 5,
+  lgd_key_prop = 1,
+  base_family = "sans",
+  which = c("row", "column"),
+  axis_side = NULL,
+  flip = FALSE,
+  ...
+) {
+
+  which <- match.arg(which)
+  
+  if (is.null(axis_side)) {
+    axis_side <- if (which == "row") "top" else "left"
+  } else {
+    if (which == "row") {
+      axis_side <- match.arg(axis_side, c("top", "bottom"))
+    } else {
+      axis_side <- match.arg(axis_side, c("left", "right"))
+    }
+  }
+
+  gp_base <- cmplx_gp(base_size, base_family, lwd = 0.5)
+  anno_height <- grid::unit(base_size * 2, "mm")
+
+  max_val <- max(x, na.rm = TRUE)
+  tick_positions <- seq(from = 0, to = max_val, length.out = 3) 
+
+  tick_labels <- scales::label_number(
+    scale_cut = scales::cut_short_scale(),
+    accuracy = 1
+  )(tick_positions)
+
+  fun <- ComplexHeatmap::anno_barplot(
+    x,
+    which = which,
+    border = FALSE,
+    axis = TRUE,
+    gp = grid::gpar(
+      fill = "grey40", 
+      col = NA
+    ),
+    axis_param = list(
+      gp = gp_base,
+      labels_rot = 90,
+      side = axis_side,
+      at = tick_positions,
+      labels = tick_labels,
+      direction = if (flip) "reverse" else "normal" 
+    ),
+    width = if (which == "row") anno_height else NULL,
+    height = if (which == "column") anno_height else NULL
+  )
+
+  # Return
+  fun
+}
+
+cmplx_anno <- function(
+  ...,
+  base_size = 5,
+  lgd_key_prop = 1,
+  base_family = "sans",
+  annotation_legend_param = list(),
+  which = c("column", "row")
+) {
+
+  which <- match.arg(which)
+
+  dots <- list(...)
+  name_side <- dots$annotation_name_side
+
+  if (!is.null(name_side)) {
+    if (which == "column" && !name_side %in% c("left", "right")) {
+      stop("For column annotations, annotation_name_side must be 'left' or 'right'")
+    }
+    if (which == "row" && !name_side %in% c("top", "bottom")) {
+      stop("For row annotations, annotation_name_side must be 'top' or 'bottom'")
+    }
+  }
+
+  pt_to_mm <- function(pt) pt * 0.352778
+
+  gp_base <- cmplx_gp(base_size, base_family)
+  anno_height <- grid::unit(pt_to_mm(base_size), "mm")
+  lgd_unit <- grid::unit(pt_to_mm(base_size * lgd_key_prop), "mm")
+
+  default_legend_param <- list(
+    title_position = "topleft",
+    title_gp = gp_base,
+    labels_gp = gp_base,
+    gap = grid::unit(0.5, "mm"),
+    grid_width = lgd_unit,
+    grid_height = lgd_unit,
+    legend_height = lgd_unit
+  )
+
+  n_anno <- sum(!names(dots) %in% c(
+    "col", "na_col", "gp", "border",
+    "annotation_name_side", "annotation_name_offset",
+    "annotation_name_rot", "annotation_name_gp",
+    "annotation_height", "annotation_width",
+    "simple_anno_size", "show_annotation_name",
+    "show_legend", "which", "gap",
+    "annotation_legend_param"
+  ))
+
+  if (length(annotation_legend_param) > 0) {
+    annotation_legend_param <- lapply(
+      annotation_legend_param,
+      \(x) utils::modifyList(default_legend_param, x)
+    )
+  }
+
+  anno <- ComplexHeatmap::HeatmapAnnotation(
+    ...,
+    which = which,
+    gap = grid::unit(0.7, "mm"),
+    simple_anno_size = anno_height,
+    annotation_name_gp = gp_base,
+    annotation_legend_param = if (length(annotation_legend_param) == 0) {
+      rep(list(default_legend_param), n_anno)
+    } else {
+      annotation_legend_param
+    }
+  )
+
+  anno
+}
+
+cmplx_legend <- function(
+  title,
+  labels,
+  base_size = 5,
+  lgd_key_prop = 1,
+  base_family = "sans",
+  ...
+) {
+
+  mm_to_pt <- function(mm) mm / 0.352778
+  pt_to_mm <- function(pt) pt * 0.352778
+
+  gp_base <- cmplx_gp(base_size, base_family)
+
+  lgd_key_size <- base_size * lgd_key_prop
+  lgd_unit <- grid::unit(pt_to_mm(lgd_key_size), "mm")
+
+  ComplexHeatmap::Legend(
+    title = title,
+    labels = labels,
+    title_gp = gp_base,
+    labels_gp = gp_base,
+    grid_width = lgd_unit,
+    legend_height = lgd_unit,
+    ...
+  )
+}
+
+cmplx_ht <- function(
+  mat,
+  heatmap_legend_param = list(),
+  ...,
+  base_size = 5,
+  lgd_key_prop = 1,
+  base_family = "sans",
+  cell_size = NULL
+) {
+
+  stopifnot(is.matrix(mat) || is.data.frame(mat))
+  mat <- as.matrix(mat)
+
+  # Dimensions
+  n_row <- nrow(mat)
+  n_col <- ncol(mat)
+
+  # Unit conversion helpers 
+  mm_to_pt <- function(mm) mm / 0.352778
+  pt_to_mm <- function(pt) pt * 0.352778
+
+  # Annotation scaling
+  gp_base <- cmplx_gp(base_size, base_family)
+  anno_height <- grid::unit(pt_to_mm(base_size), "mm")
+
+  # Legend scaling
+  lgd_key_size <- base_size * lgd_key_prop
+  lgd_unit <- grid::unit(pt_to_mm(lgd_key_size), "mm")
+
+  # Conditionally enforce square tiles
+  size_args <- list()
+  if (!is.null(cell_size)) {
+    if (is.numeric(cell_size)) {
+      cell_size <- grid::unit(cell_size, "mm")
+    }
+    size_args$width  <- cell_size * n_col
+    size_args$height <- cell_size * n_row
+  }
+
+  ht <- do.call(ComplexHeatmap::Heatmap, c(list(
+    mat,
+    ...,
+
+    # Heatmap text
+    row_names_gp = gp_base,
+    column_names_gp = gp_base,
+    column_title_gp = gp_base,
+    row_title_gp = gp_base,
+
+    # Heatmap legend
+    heatmap_legend_param = utils::modifyList(
+      list(
+        title_gp = gp_base,
+        labels_gp = gp_base,
+        grid_width = lgd_unit,
+        legend_height = lgd_unit
+      ),
+      val = heatmap_legend_param
+    ),
+
+    # Dendrogram styling
+    row_dend_gp = grid::gpar(lwd = 0.3),
+    column_dend_gp = grid::gpar(lwd = 0.3)
+  ), size_args))
+
+  # Return
+  return(ht)
+}
+
+cmplx_save <- function(
+  plot,
+  file,
+  width,
+  height,
+  units = "in",
+  device = NULL,
+  res = 300,
+  anno_lgd_list = NULL,
+  ...
+) {
+
+  to_inches <- function(x, units) {
+    switch(
+      EXPR = units,
+      "in" = x,
+      "cm" = x / 2.54,
+      "mm" = x / 25.4,
+      "px" = x / res,
+      stop("Unsupported units: ", units)
+    )
+  }
+
+  width_in  <- to_inches(width, units)
+  height_in <- to_inches(height, units)
+
+  if (is.null(device)) {
+    ext <- tools::file_ext(file)
+    device <- switch(
+      EXPR = tolower(ext),
+      pdf = grDevices::pdf,
+      svg = grDevices::svg,
+      png = grDevices::png,
+      jpeg = grDevices::jpeg,
+      jpg = grDevices::jpeg,
+      tiff = grDevices::tiff,
+      stop("Unsupported file type: ", ext)
+    )
+  }
+
+  if (identical(device, grDevices::png) ||
+      identical(device, grDevices::jpeg) ||
+      identical(device, grDevices::tiff)) {
+
+    device(
+      file,
+      width = width_in,
+      height = height_in,
+      units = "in",
+      res = res
+    )
+
+  } else {
+
+    device(
+      file,
+      width = width_in,
+      height = height_in
+    )
+  }
+
+  ComplexHeatmap::ht_opt(legend_gap = grid::unit(2.5, "mm"))
+
+  # grid::grid.newpage()
+  ComplexHeatmap::draw(
+    plot,
+    heatmap_legend_side = "right",
+    annotation_legend_side = "right",
+    annotation_legend_list = anno_lgd_list,
+    legend_grouping = "original",
+    align_heatmap_legend = "heatmap_top",
+    align_annotation_legend = "heatmap_top",
+    merge_legend = FALSE,
+    ...
+  )
+
+  invisible(grDevices::dev.off())
+}
+
+
+## Aestethics =================================================================
+colors_formula <- c(
+  "~genotype"                           = "#ECCBAE",
+  "~genotype + sample"                  = "#046C9A",
+  "~genotype + (1|sample)"              = "#D69C4E",
+  "~genotype + sample + (1|guide)"      = "#ABDDDE",
+  "~genotype + (1|sample) + (1|guide)"  = "#000000"
+)
+
+colors_method <- c(
+  "limma"    = "#66C2A5",
+  "edger"    = "#FC8D62",
+  "deseq2"   = "#8DA0CB",
+  "dream"    = "#E78AC3",
+  "nebula"   = "#A6D854",
+  "wilcox"   = "#FFD92F",
+  "sceptre"  = "#E5C494",
+  "scmageck" = "#B3B3B3"
+)
+
+colors_celltype <- c(
+  "Ery"         = "#762A83",
+  "Imm. B-cell" = "#9970AB",
+  "Gran. P"     = "#D01C8B",
+  "GMP"         = "#E76289",
+  "Gran."       = "#B2182B",
+  "MEP"         = "#8C8D27",
+  "HSC"         = "#4D9221",
+  "MkP"         = "#1B7837"
+)
+
+shapes_knockout <- c(
+  "Brd9" = 16,
+  "Cebpa" = 17,
+  "Chd4" = 15,
+  "Kmt2d" = 18,
+  "Rcor1" = 3,
+  "Klf1" = 4
+)
