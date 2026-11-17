@@ -14,14 +14,17 @@ include { visualize }  from "../modules/12-visualize.nf"
 
 // Paramters
 params {
-    data: Path = "data/GSE213511/rna_integrated.rds"
+    data: Path = "data_generated/GSE213511/rna_integrated.rds"
 
     // Prepare
     prepare_celltype = [ "Ery", "Imm. B-cell", "Gran. P", "GMP", "Gran.", "HSC" ] // "Ery", "Imm. B-cell", "Gran. P", "GMP", "Gran.", "HSC"
     prepare_knockout = [ "Cebpa", "Kmt2d", "Brd9", "Rcor1" ] // "Cebpa", "Kmt2d", "Brd9", "Rcor1"
 
     // Shuffle (1 is not shuffled "real")
-    shuffle_seed = (1..100)
+    shuffle_seed = (1..50)
+
+    // pseudobulk
+    pseudobulk_grps = [ "sample,guide" ]
 
     // limma
     limma_formula = [ "~genotype" , "~genotype + sample" ]
@@ -81,10 +84,11 @@ workflow {
     )
 
     // R: pseudobulk ----------------------------------------------------------
-    pseudobulk_args = shuffle.out
+    pseudobulk_args = shuffle.out.combine(channel.fromList(params.pseudobulk_grps))
 
     pseudobulk(
-        pseudobulk_args
+        pseudobulk_args.map { arg -> arg[0] }, // data
+        pseudobulk_args.map { arg -> arg[1] }  // groups
     )
 
    // DGE pseudobulk =========================================================

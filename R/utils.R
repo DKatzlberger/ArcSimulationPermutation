@@ -323,13 +323,34 @@ script_startup <- function(
 ## CRISPR =====================================================================
 check_obj <- function(obj) {
 
-  class <- paste(class(obj), collapse = ", ")
-  dims  <- dim(obj)
+  # Class
+  obj_class <- paste(class(obj), collapse = ", ")
+  dims <- dim(obj)
 
-  showf(fmt = "Obj.: %s", class, type = "message")
+  showf(fmt = "Obj.: %s", obj_class, type = "message")
+
   if (!is.null(dims) && length(dims) == 2) {
     showf(fmt = "Dim.: %s genes x %s cells", dims[1], dims[2], type = "message")
   }
+
+  # Extract metadata
+  if (inherits(obj, "SingleCellExperiment")) {
+    metadata <- as.data.frame(SummarizedExperiment::colData(obj))
+  } else if (inherits(obj, "Seurat")) {
+    metadata <- as.data.frame(obj@meta.data)
+  } else {
+    showf("Unsupported object class.", type = "stop")
+  }
+
+  # Required columns
+  required_cols <- c("sample", "celltype", "guide")
+  missing_cols  <- setdiff(required_cols, colnames(metadata))
+
+  if (length(missing_cols)) {
+    showf("Missing required metadata columns: %s", paste(missing_cols, collapse = ", "), type = "stop")
+  }
+
+  invisible(TRUE)
 }
 
 assign_guide_by_max_count <- function(
@@ -341,6 +362,9 @@ assign_guide_by_max_count <- function(
 
   # Extract crispr counts
   counts <- obj@assays[[assay]]$counts
+
+  # Warning: fun overwrites existing guide col
+  if ("guide" %in% colnames(obj[[]])) showf("Existing 'guide' assignment will be overwritten.", type = "warning")
 
   # Assign guides
   obj$guide <- apply(counts, 2, function(x) {
@@ -360,9 +384,7 @@ assign_guide_by_max_count <- function(
   genotypes_per_guide <- tapply(obj$genotype[valid_cells], obj$guide[valid_cells], function(x) length(unique(x)))
   problematic_guides  <- names(genotypes_per_guide[genotypes_per_guide > 1])
 
-  if (length(problematic_guides) > 0) {
-    showf("Identical guides were assigned to different genotypes", type = "stop")
-  }
+  if (length(problematic_guides) > 0) showf("Identical guides were assigned to different genotypes", type = "stop")
   
   # Verbose
   n_valid_cells <- sum(!is.na(obj$guide))
@@ -1342,15 +1364,19 @@ cmplx_anno <- function(
     legend_height = lgd_unit
   )
 
-  n_anno <- sum(!names(dots) %in% c(
-    "col", "na_col", "gp", "border",
-    "annotation_name_side", "annotation_name_offset",
-    "annotation_name_rot", "annotation_name_gp",
-    "annotation_height", "annotation_width",
-    "simple_anno_size", "show_annotation_name",
-    "show_legend", "which", "gap",
-    "annotation_legend_param"
-  ))
+  simple_anno_names <- names(dots)[
+    !vapply(dots, inherits, logical(1), what = "AnnotationFunction") &
+      !names(dots) %in% c(
+        "col", "na_col", "gp", "border",
+        "annotation_name_side", "annotation_name_offset",
+        "annotation_name_rot", "annotation_name_gp",
+        "annotation_height", "annotation_width",
+        "simple_anno_size", "show_annotation_name",
+        "show_legend", "which", "gap"
+      )
+  ]
+
+  n_anno <- length(simple_anno_names)
 
   if (length(annotation_legend_param) > 0) {
     annotation_legend_param <- lapply(
@@ -1570,6 +1596,14 @@ colors_method <- c(
   "wilcox"   = "#FFD92F",
   "sceptre"  = "#E5C494",
   "scmageck" = "#B3B3B3"
+)
+
+colors_gene_status <- c(
+  "Knockout"   = "#FDD262",
+  "Downstream" = "#C7B19C",
+  "On-target"  = "#C7B19C",
+  "Off-target" = "#446455",
+  "Background" = "#D3DDDC"
 )
 
 colors_celltype <- c(

@@ -885,20 +885,20 @@ ggplot2::stat_summary(
     width = 0.6
   )
 ) +
-ggplot2::stat_summary(
-  data = pAB_stats[pAB_stats$type == "real", ],
-  mapping = ggplot2::aes(
-    color = celltype,
-    shape = knockout
-  ),
-  fun = "mean",
-  geom = "point",
-  size = 0.25,
-  stroke = 0.2,
-  position = ggplot2::position_dodge(
-    width = 0.6
-  )
-) +
+# ggplot2::stat_summary(
+#   data = pAB_stats[pAB_stats$type == "real", ],
+#   mapping = ggplot2::aes(
+#     color = celltype,
+#     shape = knockout
+#   ),
+#   fun = "mean",
+#   geom = "point",
+#   size = 0.25,
+#   stroke = 0.2,
+#   position = ggplot2::position_dodge(
+#     width = 0.6
+#   )
+# ) +
 ggplot2::stat_summary(
   data = pAB_stats[pAB_stats$type == "real", ],
   mapping = ggplot2::aes(
@@ -957,7 +957,6 @@ ggplot2::guides(
   )
 ) +
 ggplot2::scale_y_continuous(
-  # trans = scales::pseudo_log_trans(sigma = 0.01),
   limits = function(x) c(min(0, x), max(1, x)),
   breaks = scales::pretty_breaks(n = 3)
 ) +

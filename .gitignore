@@ -21,7 +21,7 @@ pixi.lock
 slurm/
 
 # Symlinks
-data
+data_*
 results
 work
 

@@ -8,6 +8,7 @@
 seed <- 42
 set.seed(seed)
 
+
 ## Settings ===================================================================
 if (!interactive()) {
   args <- commandArgs(trailingOnly = TRUE)
@@ -16,12 +17,16 @@ if (!interactive()) {
   input_path   <- args[2]
   output_path  <- "."
 
+  data_raw_path <- file.path("data_raw", "GSE213511")
+
 } else {
   project_root <- "/home/scc_e_928652/ArcSimulationPermutation"
-  output_path  <- "data/GSE213511"
+  output_path  <- "data_generated/GSE213511"
 
-  # In vivo samples
-  sample_urls <- c(
+  data_raw_path <- file.path("data_raw", "GSE213511")
+
+  # Count data
+  count_url <- c(
     "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE213nnn/GSE213511/suppl/GSE213511%5FinVivo%5FOP1%5Fckit%5F14d%5F1%2Eh5",
     "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE213nnn/GSE213511/suppl/GSE213511%5FinVivo%5FOP1%5Flin%2D%5F14d%5F1%2Eh5",
     "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE213nnn/GSE213511/suppl/GSE213511%5FinVivo%5FOP1%5Flin%2D%5F14d%5F2%2Eh5",
@@ -35,12 +40,14 @@ if (!interactive()) {
     "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE213nnn/GSE213511/suppl/GSE213511%5FinVivo%5FOP4%5Flin%2D%5F14d%5F1%2Eh5"
   )
 
-  # Annotations
-  meta_urls <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE213nnn/GSE213511/suppl/GSE213511%5FCellAnnotation%5Finvivo%2Etsv%2Egz"
+  # Meta data
+  meta_url <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE213nnn/GSE213511/suppl/GSE213511%5FCellAnnotation%5Finvivo%2Etsv%2Egz"
 }
+
 
 ## r-utils ====================================================================
 source(file.path(project_root, "R", "utils.R"))
+
 
 ## Environment ================================================================
 scc_info <- scc_status()
@@ -56,23 +63,24 @@ script_startup(
   )
 )
 
-## Meta data ===========================================================
-destfile <- file.path(output_path, basename(URLdecode(meta_urls)))
-if (!file.exists(destfile)) download.file(meta_urls, destfile, mode = "wb", method = "libcurl")
-
-meta <- read.delim(gzfile(destfile), stringsAsFactors = FALSE, check.names = FALSE)
 
 ## Dataset ====================================================================
+### Cell meta -----------------------------------------------------------------
+dest_file <- file.path(data_raw_path, basename(URLdecode(meta_url)))
+
+if (!file.exists(dest_file)) download.file(meta_url, dest_file, mode = "wb", method = "libcurl")
+
+cell_meta <- read.delim(gzfile(dest_file), stringsAsFactors = FALSE, check.names = FALSE)
+
+### Counts --------------------------------------------------------------------
 seu_list <- list()
-for (url in sample_urls) {
+for (url in count_url) {
   file_name   <- basename(URLdecode(url))
   sample_name <- sub("^GSE213511_", "", sub("\\.h5$", "", file_name))
-  dest_file   <- file.path(output_path, file_name)
+  dest_file   <- file.path(data_raw_path, file_name)
 
-  if (!file.exists(dest_file)) {
-    download.file(url, dest_file, mode = "wb", method = "libcurl")
-  }
-
+  if (!file.exists(dest_file)) download.file(url, dest_file, mode = "wb", method = "libcurl")
+  
   # Seurat object
   f <- Seurat::Read10X_h5(dest_file)
 
@@ -80,22 +88,25 @@ for (url in sample_urls) {
   seu_obj[["CRISPR"]] <- SeuratObject::CreateAssay5Object(counts = f[["CRISPR Guide Capture"]])
 
   # Add meta
-  sample_meta <- meta[meta$Sample == sample_name, , drop = FALSE]
-  idx <- match(colnames(seu_obj), sample_meta$Barcode)
+  meta <- cell_meta[cell_meta$Sample == sample_name, , drop = FALSE]
+  idx  <- match(colnames(seu_obj), meta$Barcode)
+
+  if (anyDuplicated(meta$Barcode)) showf("Duplicate barcodes in meta for sample: %s", sample_name, type = "stop")
+  if (all(is.na(idx))) showf("No matching barcodes for sample: %s", sample_name, type = "stop")
 
   if (anyNA(idx)) {
-    showf("Warning: %s cells in %s have no annotation and will be removed.\n",sum(is.na(idx)), file_name, type = "cat")
+    showf("Warning: %s cells in %s have no annotation and will be removed.\n", sum(is.na(idx)), file_name, type = "cat")
     seu_obj <- subset(seu_obj, cells = colnames(seu_obj)[!is.na(idx)])
     idx <- idx[!is.na(idx)]
   }
 
-  # Add metadata for remaining cells
-  cell_meta <- meta[idx, , drop = FALSE]
-  rownames(cell_meta) <- colnames(seu_obj)
+  # Match meta for remaining cells
+  matched_meta <- meta[idx, , drop = FALSE]
+  rownames(matched_meta) <- colnames(seu_obj)
 
   seu_obj <- Seurat::AddMetaData(
     seu_obj,
-    metadata = cell_meta[, setdiff(colnames(cell_meta), "Barcode"), drop = FALSE]
+    metadata = matched_meta[, setdiff(colnames(matched_meta), "Barcode"), drop = FALSE]
   )
 
   # Append
@@ -112,18 +123,34 @@ seu_obj <- merge(
 seu_obj[["RNA"]]    <- SeuratObject::JoinLayers(seu_obj[["RNA"]])
 seu_obj[["CRISPR"]] <- SeuratObject::JoinLayers(seu_obj[["CRISPR"]])
 
-## Make names =================================================================
+### Make names ----------------------------------------------------------------
 colnames(seu_obj@meta.data)[colnames(seu_obj@meta.data) == "Guide"]    <- "guide"
 colnames(seu_obj@meta.data)[colnames(seu_obj@meta.data) == "Clusters"] <- "celltype"
 colnames(seu_obj@meta.data)[colnames(seu_obj@meta.data) == "Sample"]   <- "sample"
 
-remove_cols <- c("Phase", "Markers", "Timepoint", "Mixscape", "UMAP1", "UMAP2", "Clusters")
-seu_obj@meta.data <- seu_obj@meta.data[, !colnames(seu_obj@meta.data) %in% remove_cols, drop = FALSE]
+
 
 ## Save =======================================================================
-.save_rds <- fun_with_ram(base::saveRDS)
-txt       <- sprintf("saved as %s", "rna_integrated.rds")
+.check_obj <- fun_with_ram(check_obj)
+.save_rds  <- fun_with_ram(base::saveRDS)
 
+# Check output
+txt <- "checking output obj."
+.check_obj(seu_obj, info = txt)
+
+# Cell meta
+txt <- sprintf("saved as %s", "cell_metadata.rds")
+.save_rds(
+  object = cell_meta, 
+  file = file.path(
+    output_path,
+    "cell_metadata.rds"
+  ),
+  info = txt
+)
+
+# RNA integrated counts
+txt <- sprintf("saved as %s", "rna_integrated.rds")
 .save_rds(
   object = seu_obj, 
   file = file.path(

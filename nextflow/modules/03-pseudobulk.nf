@@ -8,6 +8,7 @@ process pseudobulk {
     
     input:
     path data
+    val groups
     
     output:
     path("${params.script_id}-${data.baseName}.h5ad")
@@ -16,6 +17,7 @@ process pseudobulk {
     """
     Rscript ${workflow.launchDir}/R/03-pseudobulk.R \
         "${workflow.launchDir}" \
-        "${data}"
+        "${data}" \
+        "${groups}"
     """
 }

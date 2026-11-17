@@ -16,6 +16,7 @@
 seed <- 42
 set.seed(seed)
 
+
 ## Settings ===================================================================
 if (!interactive()) {
   # Commands
@@ -71,6 +72,7 @@ if (!interactive()) {
 ## r-utils ====================================================================
 source(file.path(project_root, "R", "utils.R"))
 
+
 ## Environment ================================================================
 scc_info <- scc_status()
 
@@ -85,8 +87,10 @@ script_startup(
   )
 )
 
+
 ## Script info ================================================================
 showf(fmt = "\n%s\n", line80(paste0(script_name, ".R")), type = "cat")
+
 
 ## Dataset ====================================================================
 .read_rds  <- fun_with_ram(base::readRDS)
@@ -106,14 +110,16 @@ seu_obj <- switch(EXPR = ext,
 txt <- "checking input obj."
 .check_obj(seu_obj, info = txt)
 
-## Celltype ===================================================================
+
+## Prepare ====================================================================
+### Celltype ------------------------------------------------------------------
 .subset <- fun_with_ram(base::subset)
 
 txt     <- sprintf("subsetting to celltype '%s'", celltype)
 keep    <- colnames(seu_obj)[seu_obj$celltype %in% celltype]
 seu_obj <- .subset(seu_obj, cells = keep, info = txt)
 
-## Genotype & on_guide ========================================================
+### Genotype, guide & on_guide ------------------------------------------------
 .assign_guide_by_max_count <- fun_with_ram(assign_guide_by_max_count)
 
 seu_obj <- .assign_guide_by_max_count(seu_obj)
@@ -126,7 +132,7 @@ if (!has_KO && !has_NTC) showf("Neither '%s' nor 'NTC' assigned to any cells.", 
 if (!is.null(knockout) && !has_KO) showf("'%s' not assigned to any cells.", knockout, type = "stop")
 if (!has_NTC) showf("'%s' not assigned to any cells.", "NTC", type = "stop")
 
-## Subset to knockout, NTC & cells with enough features =======================
+### Cells: subset by knockout, NTC & feature counts ---------------------------
 if (is.null(knockout)) {
   txt  <- "subsetting to 'NTC'"
   keep <- colnames(seu_obj)[seu_obj$genotype %in% "NTC"]
@@ -138,7 +144,13 @@ if (is.null(knockout)) {
 seu_obj <- .subset(seu_obj, cells = keep, info = txt)
 seu_obj <- subset(seu_obj, subset = nFeature_RNA >= 1000 & nFeature_RNA <= 5000)
 
-## Convert to SingleCellExperiment ============================================
+### Genes: subset by detection ------------------------------------------------
+matr <- SeuratObject::LayerData(seu_obj, assay = "RNA", layer = "counts")
+keep <- Matrix::rowSums(matr > 0) >= 10
+
+seu_obj <- subset(seu_obj, features = rownames(matr)[keep])
+
+### Convert to SingleCellExperiment -------------------------------------------
 matr <- SeuratObject::LayerData(seu_obj, assay = "RNA", layer = "counts")
 meta <- seu_obj@meta.data
 
@@ -166,6 +178,7 @@ sce_rd <- do.call(
 SummarizedExperiment::rowData(sce_obj) <- NULL
 SummarizedExperiment::rowData(sce_obj) <- sce_rd
 
+
 ## Save =======================================================================
 .write_h5ad <- fun_with_ram(anndataR::write_h5ad)
 
@@ -186,6 +199,7 @@ txt <- sprintf("saved as %s", paste0(output_name, ".h5ad"))
   mode = "w",
   info = txt
 )
+
 
 ## Script info ================================================================
 showf("\n◷ %s ====================================================\n", date(), type = "cat")

@@ -24,6 +24,7 @@ if (!interactive()) {
   output_path  <- "."
 
   # Params
+  groups <- strsplit(trail_args[3], split = ",", fixed = TRUE)[[1]]
 
   # Output
   input_name  <- tools::file_path_sans_ext(basename(input_path))
@@ -45,6 +46,7 @@ if (!interactive()) {
   if (!dir.exists(output_path)) dir.create(path = output_path, recursive = TRUE)
 
   # Params
+  groups <- c("sample", "guide")
 
   # Output
   input_name  <- tools::file_path_sans_ext(basename(input_path))
@@ -52,8 +54,10 @@ if (!interactive()) {
   output_name <- paste0(output_name)
 }
 
+
 ## r-utils ====================================================================
 source(file.path(project_root, "R", "utils.R"))
+
 
 ## Environment ================================================================
 scc_info <- scc_status()
@@ -68,8 +72,10 @@ script_startup(
   )
 )
 
+
 ## Script info ================================================================
 showf(fmt = "\n%s\n", line80(paste0(script_name, ".R")), type = "cat")
+
 
 ## Dataset ====================================================================
 .read_rds  <- fun_with_ram(base::readRDS)
@@ -93,7 +99,9 @@ txt <- "checking input obj."
 sce_rd <- SingleCellExperiment::rowData(sce_obj)
 sce_rd <- as.data.frame(sce_rd)
 
+
 ## Pseudobulk =================================================================
+### Aggregate -----------------------------------------------------------------
 .aggregate_expression <- fun_with_ram(scuttle::aggregateAcrossCells)
 
 groups  <- c("sample", "guide")
@@ -105,6 +113,7 @@ sce_obj <- .aggregate_expression(
   use.assay.type = "counts",
   info = txt
 )
+
 
 ## Save =======================================================================
 .write_h5ad <- fun_with_ram(anndataR::write_h5ad)
@@ -126,6 +135,7 @@ txt <- sprintf("saved as %s", paste0(output_name, ".h5ad"))
   mode = "w",
   info = txt
 )
+
 
 ## Script info ================================================================
 showf("\n◷ %s ====================================================\n", date(), type = "cat")
